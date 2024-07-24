@@ -1,16 +1,14 @@
-// src/components/Notes.js
-
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase-config';
-import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
-import { Button, Form, ListGroup, Container, Alert, Row, Col } from 'react-bootstrap';
+import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, where } from 'firebase/firestore';
+import { Button, Form, ListGroup, Container, Alert, Row, Col, Card } from 'react-bootstrap';
 import { useAuth } from '../context/AuthContext';
 import NoteHistory from './NoteHistory';
 
 const formatTimestamp = (timestamp) => {
     if (timestamp && timestamp.toDate) {
         const date = timestamp.toDate();
-        return date.toLocaleString(); // Adjust format as needed!!!!!
+        return date.toLocaleString(); // Adjust format as needed
     }
     return 'Invalid Date';
 };
@@ -23,19 +21,48 @@ const Notes = () => {
     const [error, setError] = useState('');
     const [historyVisible, setHistoryVisible] = useState(null);
     const [reverting, setReverting] = useState(false);
+    const [categories, setCategories] = useState([]);
+    const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('');
+    const [newCategoryInput, setNewCategoryInput] = useState('');
+    const [noteCategoryInput, setNoteCategoryInput] = useState('');
     const user = useAuth();
 
     useEffect(() => {
-        const unsubscribe = onSnapshot(collection(db, 'notes'), (snapshot) => {
-            const notesList = snapshot.docs.map((doc) => ({
-                id: doc.id,
-                ...doc.data(),
-            }));
-            setNotes(notesList);
+        // Load categories from Firestore
+        const unsubscribe = onSnapshot(collection(db, 'categories'), (snapshot) => {
+            const categoriesList = snapshot.docs.map((doc) => doc.data().name);
+            setCategories(categoriesList);
         });
 
         return () => unsubscribe();
     }, []);
+
+    useEffect(() => {
+        // Load notes from Firestore with optional category filter
+        const fetchNotes = async () => {
+            try {
+                const notesCollection = collection(db, 'notes');
+                const notesQuery = selectedCategoryFilter
+                    ? query(notesCollection, where('category', '==', selectedCategoryFilter))
+                    : notesCollection;
+
+                const unsubscribe = onSnapshot(notesQuery, (snapshot) => {
+                    const notesList = snapshot.docs.map((doc) => ({
+                        id: doc.id,
+                        ...doc.data(),
+                    }));
+                    setNotes(notesList);
+                });
+
+                return () => unsubscribe();
+            } catch (err) {
+                setError(`Failed to fetch notes: ${err.message}`);
+                console.error('Error fetching notes:', err);
+            }
+        };
+
+        fetchNotes();
+    }, [selectedCategoryFilter]);
 
     const handleSaveNote = async (e) => {
         e.preventDefault();
@@ -52,9 +79,9 @@ const Notes = () => {
                 const updatedHistory = [
                     ...selectedNote.history,
                     {
-                        content: selectedNote.content, // Store old content
-                        timestamp: selectedNote.timestamp, // Store old timestamp
-                        modifierEmail: user.email // Current user as the modifier
+                        content: selectedNote.content,
+                        timestamp: selectedNote.timestamp,
+                        modifierEmail: user.email
                     }
                 ];
 
@@ -62,20 +89,23 @@ const Notes = () => {
                     content: newNote,
                     timestamp: new Date(),
                     history: updatedHistory,
-                    creatorEmail: selectedNote.creatorEmail // Preserve the email of the note creator
+                    category: noteCategoryInput,
+                    creatorEmail: selectedNote.creatorEmail
                 });
             } else {
                 // Add new note
                 await addDoc(collection(db, 'notes'), {
                     content: newNote,
                     timestamp: new Date(),
-                    history: [], // Initial history is empty
-                    creatorEmail: user.email // Store the email of the note creator
+                    history: [],
+                    category: noteCategoryInput,
+                    creatorEmail: user.email
                 });
             }
             setNewNote('');
             setSelectedNote(null);
             setEditing(false);
+            setNoteCategoryInput('');
             setError('');
         } catch (err) {
             setError(`Failed to save note: ${err.message}`);
@@ -86,6 +116,7 @@ const Notes = () => {
     const handleEditNote = (note) => {
         setNewNote(note.content);
         setSelectedNote(note);
+        setNoteCategoryInput(note.category || ''); // Load note's category
         setEditing(true);
         setReverting(false);
     };
@@ -115,17 +146,17 @@ const Notes = () => {
             const newHistory = [
                 ...currentNote.history,
                 {
-                    content: currentNote.content, // Save the current content before reverting
-                    timestamp: currentNote.timestamp, // Current timestamp
-                    modifierEmail: user.email // User who is performing the revert
+                    content: currentNote.content,
+                    timestamp: currentNote.timestamp,
+                    modifierEmail: user.email
                 }
             ];
 
             // Update the note in Firestore with the new content and history
             await updateDoc(noteRef, {
                 content: version.content,
-                timestamp: new Date(), // Timestamp of the revert
-                history: newHistory // Updated history
+                timestamp: new Date(),
+                history: newHistory
             });
 
             // Update local state
@@ -142,56 +173,132 @@ const Notes = () => {
         }
     };
 
+    const handleAddCategory = async () => {
+        if (newCategoryInput.trim() === '') return;
+
+        try {
+            const categoryRef = collection(db, 'categories');
+            await addDoc(categoryRef, { name: newCategoryInput.trim() });
+            setNewCategoryInput('');
+        } catch (err) {
+            setError(`Failed to add category: ${err.message}`);
+            console.error('Error adding category:', err);
+        }
+    };
+
     return (
         <Container className="mt-5">
-            <h2>Notes</h2>
+            <h2 className="mb-4">Notes</h2>
             {error && <Alert variant="danger">{error}</Alert>}
             {user && (
-                <Form onSubmit={handleSaveNote}>
-                    <Form.Group controlId="formNewNote">
-                        <Form.Label>{editing ? 'Edit Note' : 'New Note'}</Form.Label>
-                        <Form.Control
-                            type="text"
-                            value={newNote}
-                            onChange={(e) => setNewNote(e.target.value)}
-                        />
-                    </Form.Group>
-                    <Button variant="primary" type="submit" className="mt-3">
-                        {editing ? 'Save' : 'Add'} Note
-                    </Button>
-                </Form>
+                <>
+                    <Card className="mb-4">
+                        <Card.Header>{editing ? 'Edit Note' : 'New Note'}</Card.Header>
+                        <Card.Body>
+                            <Form onSubmit={handleSaveNote}>
+                                <Form.Group controlId="formNewNote" className="mb-3">
+                                    <Form.Label>Note Content</Form.Label>
+                                    <Form.Control
+                                        as="textarea"
+                                        rows={3}
+                                        value={newNote}
+                                        onChange={(e) => setNewNote(e.target.value)}
+                                    />
+                                </Form.Group>
+                                <Form.Group controlId="formNoteCategory" className="mb-3">
+                                    <Form.Label>Note Category</Form.Label>
+                                    <Form.Control
+                                        as="select"
+                                        value={noteCategoryInput}
+                                        onChange={(e) => setNoteCategoryInput(e.target.value)}
+                                    >
+                                        <option value="">Select a category</option>
+                                        {categories.map((cat, index) => (
+                                            <option key={index} value={cat}>{cat}</option>
+                                        ))}
+                                    </Form.Control>
+                                </Form.Group>
+                                <Button variant="primary" type="submit">
+                                    {editing ? 'Save' : 'Add'} Note
+                                </Button>
+                            </Form>
+                        </Card.Body>
+                    </Card>
 
+                    <Card className="mb-4">
+                        <Card.Header>Add New Category</Card.Header>
+                        <Card.Body>
+                            <Form.Group controlId="formNewCategory" className="mb-3">
+                                <Form.Label>New Category Name</Form.Label>
+                                <Form.Control
+                                    type="text"
+                                    value={newCategoryInput}
+                                    onChange={(e) => setNewCategoryInput(e.target.value)}
+                                />
+                            </Form.Group>
+                            <Button variant="secondary" onClick={handleAddCategory}>
+                                Add Category
+                            </Button>
+                        </Card.Body>
+                    </Card>
+
+                    <Card className="mb-4">
+                        <Card.Header>Filter Notes by Category</Card.Header>
+                        <Card.Body>
+                            <Form.Group controlId="formCategoryFilter" className="mb-3">
+                                <Form.Control
+                                    as="select"
+                                    value={selectedCategoryFilter}
+                                    onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+                                >
+                                    <option value="">All Categories</option>
+                                    {categories.map((cat, index) => (
+                                        <option key={index} value={cat}>{cat}</option>
+                                    ))}
+                                </Form.Control>
+                            </Form.Group>
+                        </Card.Body>
+                    </Card>
+                </>
             )}
-            <ListGroup className="mt-3">
+
+            <ListGroup className="mt-4">
                 {notes.map((note) => (
-                    <ListGroup.Item key={note.id}>
+                    <ListGroup.Item key={note.id} className="mb-2">
                         <Row>
                             <Col>
-                                <div>{note.content}</div>
-                                <small className="text-muted">
-                                    Created by: {note.creatorEmail}<br />
-                                    Created on: {formatTimestamp(note.timestamp)}<br />
-                                    {note.history.length > 0 && (
-                                        <div>
-                                            Last modified by: {note.history[note.history.length - 1].modifierEmail}<br />
-                                            Last modified on: {formatTimestamp(note.history[note.history.length - 1].timestamp)}
-                                        </div>
+                                <Card>
+                                    <Card.Body>
+                                        <Card.Title>{note.content}</Card.Title>
+                                        <Card.Subtitle className="mb-2 text-muted">
+                                            Category: {note.category || 'None'}
+                                        </Card.Subtitle>
+                                        <Card.Text>
+                                            Created by: {note.creatorEmail}<br />
+                                            Created on: {formatTimestamp(note.timestamp)}
+                                        </Card.Text>
+                                        {note.history.length > 0 && (
+                                            <Card.Text>
+                                                Last modified by: {note.history[note.history.length - 1].modifierEmail}<br />
+                                                Last modified on: {formatTimestamp(note.history[note.history.length - 1].timestamp)}
+                                            </Card.Text>
+                                        )}
+                                    </Card.Body>
+                                    {user && (
+                                        <Card.Footer>
+                                            <Button variant="warning" onClick={() => handleEditNote(note)} className="me-2">
+                                                Edit
+                                            </Button>
+                                            <Button variant="danger" onClick={() => handleDeleteNote(note.id)} className="me-2">
+                                                Delete
+                                            </Button>
+                                            <Button variant="info" onClick={() => toggleHistory(note.id)}>
+                                                {historyVisible === note.id ? 'Hide History' : 'View History'}
+                                            </Button>
+                                        </Card.Footer>
                                     )}
-                                </small>
+                                </Card>
                             </Col>
-                            {user && (
-                                <Col xs="auto">
-                                    <Button variant="warning" onClick={() => handleEditNote(note)}>
-                                        Edit
-                                    </Button>
-                                    <Button variant="danger" onClick={() => handleDeleteNote(note.id)} className="ms-2">
-                                        Delete
-                                    </Button>
-                                    <Button variant="info" onClick={() => toggleHistory(note.id)} className="ms-2">
-                                        {historyVisible === note.id ? 'Hide History' : 'View History'}
-                                    </Button>
-                                </Col>
-                            )}
                         </Row>
                         {historyVisible === note.id && (
                             <NoteHistory
