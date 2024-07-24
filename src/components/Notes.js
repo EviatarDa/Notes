@@ -1,7 +1,7 @@
 // src/components/Notes.js
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase-config';
-import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, Timestamp, getDoc } from 'firebase/firestore';
 import { Button, Form, ListGroup, Container, Alert, Row, Col } from 'react-bootstrap';
 import { useAuth } from '../context/AuthContext';
 import NoteHistory from './NoteHistory';
@@ -13,6 +13,7 @@ const Notes = () => {
     const [editing, setEditing] = useState(false);
     const [error, setError] = useState('');
     const [historyVisible, setHistoryVisible] = useState(null);
+    const [reverting, setReverting] = useState(false);
     const user = useAuth();
 
     useEffect(() => {
@@ -33,25 +34,33 @@ const Notes = () => {
 
         try {
             if (!user) throw new Error('User not authenticated');
+
             if (selectedNote) {
-                // Update existing note with history
+                // Update existing note with new history entry
                 const noteRef = doc(db, 'notes', selectedNote.id);
+
+                const updatedHistory = [
+                    ...selectedNote.history,
+                    {
+                        content: selectedNote.content || '', // Ensure old content is not undefined
+                        timestamp: selectedNote.timestamp || Timestamp.now(), // Use Firestore Timestamp
+                        modifierEmail: user.email || 'unknown' // Ensure modifier email is not undefined
+                    }
+                ];
+
                 await updateDoc(noteRef, {
                     content: newNote,
-                    timestamp: new Date(),
-                    history: [
-                        ...selectedNote.history,
-                        { content: selectedNote.content, timestamp: new Date().toISOString(), email: user.email }
-                    ],
-                    email: user.email // Update the email of the note creator
+                    timestamp: Timestamp.now(), // Use Firestore Timestamp
+                    history: updatedHistory,
+                    email: selectedNote.email || 'unknown' // Ensure email is not undefined
                 });
             } else {
                 // Add new note
                 await addDoc(collection(db, 'notes'), {
                     content: newNote,
-                    timestamp: new Date(),
+                    timestamp: Timestamp.now(), // Use Firestore Timestamp
                     history: [], // Initial history is empty
-                    email: user.email // Store the email of the note creator
+                    creatorEmail: user.email || 'unknown' // Ensure creatorEmail is not undefined
                 });
             }
             setNewNote('');
@@ -59,8 +68,8 @@ const Notes = () => {
             setEditing(false);
             setError('');
         } catch (err) {
-            setError('Failed to save note');
-            console.error(err);
+            setError(`Failed to save note: ${err.message}`);
+            console.error('Error saving note:', err);
         }
     };
 
@@ -68,19 +77,54 @@ const Notes = () => {
         setNewNote(note.content);
         setSelectedNote(note);
         setEditing(true);
+        setReverting(false);
     };
 
     const handleDeleteNote = async (id) => {
         try {
             await deleteDoc(doc(db, 'notes', id));
         } catch (err) {
-            setError('Failed to delete note');
-            console.error(err);
+            setError(`Failed to delete note: ${err.message}`);
+            console.error('Error deleting note:', err);
         }
     };
 
     const toggleHistory = (noteId) => {
         setHistoryVisible(historyVisible === noteId ? null : noteId);
+    };
+
+    const handleRevertVersion = async (noteId, version) => {
+        try {
+            const noteRef = doc(db, 'notes', noteId);
+            // Get the current note
+            const noteSnapshot = await getDoc(noteRef);
+            const currentNote = noteSnapshot.data();
+
+            if (!currentNote) {
+                throw new Error('Note not found');
+            }
+
+            // Add the current state of the note to history
+            const updatedHistory = [
+                ...currentNote.history,
+                {
+                    content: currentNote.content,
+                    timestamp: Timestamp.now(), // Use Firestore Timestamp for current state
+                    modifierEmail: user.email || 'unknown' // Ensure modifier email is not undefined
+                }
+            ];
+
+            // Update note with the selected history version
+            await updateDoc(noteRef, {
+                content: version.content,
+                timestamp: Timestamp.now(), // Use Firestore Timestamp
+                history: updatedHistory // Update history with new entry
+            });
+            setReverting(true);
+        } catch (err) {
+            setError(`Failed to revert note: ${err.message}`);
+            console.error('Error reverting note:', err);
+        }
     };
 
     return (
@@ -108,7 +152,12 @@ const Notes = () => {
                         <Row>
                             <Col>
                                 <div>{note.content}</div>
-                                <small className="text-muted">Created by: {note.email}</small>
+                                <small className="text-muted">
+                                    Created by: {note.creatorEmail}
+                                    {note.history.length > 0 && (
+                                        <div>Last modified by: {note.history[note.history.length - 1].modifierEmail}</div>
+                                    )}
+                                </small>
                             </Col>
                             {user && (
                                 <Col xs="auto">
@@ -125,11 +174,15 @@ const Notes = () => {
                             )}
                         </Row>
                         {historyVisible === note.id && (
-                            <NoteHistory history={note.history} />
+                            <NoteHistory
+                                history={note.history}
+                                onRevert={(version) => handleRevertVersion(note.id, version)}
+                            />
                         )}
                     </ListGroup.Item>
                 ))}
             </ListGroup>
+            {reverting && <Alert variant="success" className="mt-3">Note reverted successfully!</Alert>}
         </Container>
     );
 };
