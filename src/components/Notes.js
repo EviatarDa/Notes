@@ -1,10 +1,19 @@
 // src/components/Notes.js
+
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase-config';
-import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, Timestamp, getDoc } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
 import { Button, Form, ListGroup, Container, Alert, Row, Col } from 'react-bootstrap';
 import { useAuth } from '../context/AuthContext';
 import NoteHistory from './NoteHistory';
+
+const formatTimestamp = (timestamp) => {
+    if (timestamp && timestamp.toDate) {
+        const date = timestamp.toDate();
+        return date.toLocaleString(); // Adjust format as needed
+    }
+    return 'Invalid Date';
+};
 
 const Notes = () => {
     const [notes, setNotes] = useState([]);
@@ -42,25 +51,25 @@ const Notes = () => {
                 const updatedHistory = [
                     ...selectedNote.history,
                     {
-                        content: selectedNote.content || '', // Ensure old content is not undefined
-                        timestamp: selectedNote.timestamp || Timestamp.now(), // Use Firestore Timestamp
-                        modifierEmail: user.email || 'unknown' // Ensure modifier email is not undefined
+                        content: selectedNote.content, // Store old content
+                        timestamp: selectedNote.timestamp, // Store old timestamp
+                        modifierEmail: user.email // Current user as the modifier
                     }
                 ];
 
                 await updateDoc(noteRef, {
                     content: newNote,
-                    timestamp: Timestamp.now(), // Use Firestore Timestamp
+                    timestamp: new Date(),
                     history: updatedHistory,
-                    email: selectedNote.email || 'unknown' // Ensure email is not undefined
+                    creatorEmail: selectedNote.creatorEmail // Preserve the email of the note creator
                 });
             } else {
                 // Add new note
                 await addDoc(collection(db, 'notes'), {
                     content: newNote,
-                    timestamp: Timestamp.now(), // Use Firestore Timestamp
+                    timestamp: new Date(),
                     history: [], // Initial history is empty
-                    creatorEmail: user.email || 'unknown' // Ensure creatorEmail is not undefined
+                    creatorEmail: user.email // Store the email of the note creator
                 });
             }
             setNewNote('');
@@ -96,30 +105,30 @@ const Notes = () => {
     const handleRevertVersion = async (noteId, version) => {
         try {
             const noteRef = doc(db, 'notes', noteId);
-            // Get the current note
-            const noteSnapshot = await getDoc(noteRef);
-            const currentNote = noteSnapshot.data();
 
-            if (!currentNote) {
-                throw new Error('Note not found');
-            }
+            // Get the current note to include in history
+            const currentNote = notes.find(note => note.id === noteId);
 
-            // Add the current state of the note to history
-            const updatedHistory = [
-                ...currentNote.history,
+            // Ensure the current note's timestamp is a Date object
+            const currentTimestamp = currentNote.timestamp && currentNote.timestamp.toDate ? currentNote.timestamp.toDate() : new Date();
+
+            // Prepare new history entries
+            const newHistory = [
+                ...currentNote.history, // Keep existing history
                 {
-                    content: currentNote.content,
-                    timestamp: Timestamp.now(), // Use Firestore Timestamp for current state
-                    modifierEmail: user.email || 'unknown' // Ensure modifier email is not undefined
+                    content: currentNote.content, // Save current content to history
+                    timestamp: currentTimestamp, // Save current timestamp to history
+                    modifierEmail: user.email // Record the user making the revert
                 }
             ];
 
-            // Update note with the selected history version
+            // Update the note with the selected version's content and new history
             await updateDoc(noteRef, {
                 content: version.content,
-                timestamp: Timestamp.now(), // Use Firestore Timestamp
-                history: updatedHistory // Update history with new entry
+                timestamp: new Date(), // Update timestamp for the reverted version
+                history: newHistory // Updated history including current state
             });
+
             setReverting(true);
         } catch (err) {
             setError(`Failed to revert note: ${err.message}`);
@@ -153,9 +162,13 @@ const Notes = () => {
                             <Col>
                                 <div>{note.content}</div>
                                 <small className="text-muted">
-                                    Created by: {note.creatorEmail}
+                                    Created by: {note.creatorEmail}<br />
+                                    Created on: {formatTimestamp(note.timestamp)}<br />
                                     {note.history.length > 0 && (
-                                        <div>Last modified by: {note.history[note.history.length - 1].modifierEmail}</div>
+                                        <div>
+                                            Last modified by: {note.history[note.history.length - 1].modifierEmail}<br />
+                                            Last modified on: {formatTimestamp(note.history[note.history.length - 1].timestamp)}
+                                        </div>
                                     )}
                                 </small>
                             </Col>
