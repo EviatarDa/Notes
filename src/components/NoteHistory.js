@@ -21,11 +21,9 @@ const NoteHistory = ({ history, onRevert }) => {
                         Modified on: {formatTimestamp(version.timestamp)}<br />
                         Modified by: {version.modifierEmail}
                     </small>
-                    <div className="mt-2">
-                        <Button variant="info" onClick={() => onRevert(version)}>
-                            Revert to this version
-                        </Button>
-                    </div>
+                    <Button variant="info" onClick={() => onRevert(version)} className="mt-2">
+                        Revert to this version
+                    </Button>
                 </ListGroup.Item>
             ))}
         </ListGroup>

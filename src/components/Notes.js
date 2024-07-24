@@ -10,7 +10,7 @@ import NoteHistory from './NoteHistory';
 const formatTimestamp = (timestamp) => {
     if (timestamp && timestamp.toDate) {
         const date = timestamp.toDate();
-        return date.toLocaleString(); // Adjust format as needed
+        return date.toLocaleString(); // Adjust format as needed!!!!!
     }
     return 'Invalid Date';
 };
@@ -48,6 +48,7 @@ const Notes = () => {
                 // Update existing note with new history entry
                 const noteRef = doc(db, 'notes', selectedNote.id);
 
+                // Save the current state of the note as part of its history
                 const updatedHistory = [
                     ...selectedNote.history,
                     {
@@ -106,28 +107,33 @@ const Notes = () => {
         try {
             const noteRef = doc(db, 'notes', noteId);
 
-            // Get the current note to include in history
+            // Find the current note to prepare for history update
             const currentNote = notes.find(note => note.id === noteId);
-
-            // Ensure the current note's timestamp is a Date object
-            const currentTimestamp = currentNote.timestamp && currentNote.timestamp.toDate ? currentNote.timestamp.toDate() : new Date();
+            if (!currentNote) throw new Error('Note not found');
 
             // Prepare new history entries
             const newHistory = [
-                ...currentNote.history, // Keep existing history
+                ...currentNote.history,
                 {
-                    content: currentNote.content, // Save current content to history
-                    timestamp: currentTimestamp, // Save current timestamp to history
-                    modifierEmail: user.email // Record the user making the revert
+                    content: currentNote.content, // Save the current content before reverting
+                    timestamp: currentNote.timestamp, // Current timestamp
+                    modifierEmail: user.email // User who is performing the revert
                 }
             ];
 
-            // Update the note with the selected version's content and new history
+            // Update the note in Firestore with the new content and history
             await updateDoc(noteRef, {
                 content: version.content,
-                timestamp: new Date(), // Update timestamp for the reverted version
-                history: newHistory // Updated history including current state
+                timestamp: new Date(), // Timestamp of the revert
+                history: newHistory // Updated history
             });
+
+            // Update local state
+            setNotes(prevNotes => prevNotes.map(note =>
+                note.id === noteId
+                    ? { ...note, content: version.content, timestamp: new Date(), history: newHistory }
+                    : note
+            ));
 
             setReverting(true);
         } catch (err) {
@@ -154,6 +160,7 @@ const Notes = () => {
                         {editing ? 'Save' : 'Add'} Note
                     </Button>
                 </Form>
+
             )}
             <ListGroup className="mt-3">
                 {notes.map((note) => (
